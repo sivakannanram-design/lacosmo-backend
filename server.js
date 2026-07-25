@@ -2,21 +2,39 @@ const express = require('express');
 const Razorpay = require('razorpay');
 const cors = require('cors');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 
 const app = express();
 app.use(cors());
 
-// Raw body needed for webhook signature verification
+// Raw body for webhook
 app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
+
+// MongoDB Connection
+mongoose.connect('mongodb+srv://sivakannanram_db_user:TnTjo7BuaPrXuCLy@cluster0.ehoytmm.mongodb.net/?retryWrites=true&w=majority')
+  .then(() => console.log('MongoDB Connected'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
+// Payment Schema
+const paymentSchema = new mongoose.Schema({
+  paymentLinkId: { type: String, required: true, unique: true },
+  status: { type: String, default: 'created' },
+  amount: Number,
+  name: String,
+  phone: String,
+  address: String,
+  paymentId: String,
+  createdAt: { type: Date, default: Date.now },
+  paidAt: Date,
+});
+
+const Payment = mongoose.model('Payment', paymentSchema);
 
 const razorpay = new Razorpay({
   key_id: 'rzp_test_THfhMRJtsqlVO1',
   key_secret: 'A68VJ6R6lnWwkmYQZU1O7Guu',
 });
-
-// Temporary storage
-const payments = {};
 
 // Create Payment Link
 app.post('/create-payment-link', async (req, res) => {
@@ -46,14 +64,15 @@ app.post('/create-payment-link', async (req, res) => {
       },
     });
 
-    payments[paymentLink.id] = {
+    // Save to database
+    await Payment.create({
+      paymentLinkId: paymentLink.id,
       status: 'created',
-      amount: amount,
+      amount,
       name,
       phone,
       address,
-      createdAt: new Date(),
-    };
+    });
 
     res.json({
       success: true,
@@ -66,14 +85,13 @@ app.post('/create-payment-link', async (req, res) => {
   }
 });
 
-// Webhook endpoint with error handling
-app.post('/webhook', (req, res) => {
+// Webhook endpoint
+app.post('/webhook', async (req, res) => {
   try {
     const secret = 'lacosmo_secret_2026';
     const signature = req.headers['x-razorpay-signature'];
 
     if (!signature) {
-      console.error('Webhook Error: Missing signature');
       return res.status(400).json({ error: 'Missing signature' });
     }
 
@@ -82,59 +100,62 @@ app.post('/webhook', (req, res) => {
     const digest = shasum.digest('hex');
 
     if (digest !== signature) {
-      console.error('Webhook Error: Invalid signature');
       return res.status(400).json({ error: 'Invalid signature' });
     }
 
-    let event;
-    try {
-      event = JSON.parse(req.body.toString());
-    } catch (parseError) {
-      console.error('Webhook Error: Failed to parse JSON', parseError);
-      return res.status(400).json({ error: 'Invalid JSON payload' });
-    }
-
+    const event = JSON.parse(req.body.toString());
     console.log('Webhook received:', event.event);
 
     if (event.event === 'payment_link.paid') {
       const paymentLinkId = event.payload?.payment_link?.entity?.id;
       const paymentId = event.payload?.payment?.entity?.id;
 
-      if (paymentLinkId && payments[paymentLinkId]) {
-        payments[paymentLinkId].status = 'paid';
-        payments[paymentLinkId].paymentId = paymentId || null;
-        payments[paymentLinkId].paidAt = new Date();
+      if (paymentLinkId) {
+        await Payment.findOneAndUpdate(
+          { paymentLinkId },
+          {
+            status: 'paid',
+            paymentId: paymentId || null,
+            paidAt: new Date(),
+          }
+        );
         console.log('Payment marked as PAID:', paymentLinkId);
       }
     }
 
     if (event.event === 'payment_link.expired') {
       const paymentLinkId = event.payload?.payment_link?.entity?.id;
-      if (paymentLinkId && payments[paymentLinkId]) {
-        payments[paymentLinkId].status = 'expired';
-        console.log('Payment link expired:', paymentLinkId);
+      if (paymentLinkId) {
+        await Payment.findOneAndUpdate(
+          { paymentLinkId },
+          { status: 'expired' }
+        );
       }
     }
 
     res.status(200).json({ status: 'ok' });
   } catch (error) {
-    console.error('Unexpected Webhook Error:', error);
+    console.error('Webhook Error:', error);
     res.status(200).json({ status: 'error_logged' });
   }
 });
 
 // Check payment status
-app.get('/payment-status/:id', (req, res) => {
-  const payment = payments[req.params.id];
-  if (payment) {
-    res.json({ success: true, ...payment });
-  } else {
-    res.status(404).json({ success: false, error: 'Payment not found' });
+app.get('/payment-status/:id', async (req, res) => {
+  try {
+    const payment = await Payment.findOne({ paymentLinkId: req.params.id });
+    if (payment) {
+      res.json({ success: true, ...payment.toObject() });
+    } else {
+      res.status(404).json({ success: false, error: 'Payment not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
 app.get('/', (req, res) => {
-  res.send('LA COSMO Backend is running with Webhooks');
+  res.send('LA COSMO Backend is running with MongoDB');
 });
 
 const PORT = process.env.PORT || 3000;
