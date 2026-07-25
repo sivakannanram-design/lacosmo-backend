@@ -3,20 +3,19 @@ const Razorpay = require('razorpay');
 const cors = require('cors');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(cors());
 
-// Raw body for webhook
 app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
-// MongoDB Connection
+// MongoDB
 mongoose.connect('mongodb+srv://sivakannanram_db_user:TnTjo7BuaPrXuCLy@cluster0.ehoytmm.mongodb.net/?retryWrites=true&w=majority')
   .then(() => console.log('MongoDB Connected'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// Payment Schema
 const paymentSchema = new mongoose.Schema({
   paymentLinkId: { type: String, required: true, unique: true },
   status: { type: String, default: 'created' },
@@ -35,6 +34,44 @@ const razorpay = new Razorpay({
   key_id: 'rzp_test_THfhMRJtsqlVO1',
   key_secret: 'A68VJ6R6lnWwkmYQZU1O7Guu',
 });
+
+// ========== EMAIL SETUP ==========
+// Using Gmail (you need an App Password)
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'itslacosmo@gmail.com',          // Your Gmail
+    pass: 'YOUR_GMAIL_APP_PASSWORD',       // ← Replace this
+  },
+});
+
+// Send email function
+async function sendEmails(payment) {
+  try {
+    // 1. Notification to Store Owner
+    await transporter.sendMail({
+      from: '"LA COSMO Orders" <itslacosmo@gmail.com>',
+      to: 'contact@lacosmo.in',
+      subject: `New Order Received - ₹${payment.amount}`,
+      html: `
+        <h2>New Order Received</h2>
+        <p><strong>Customer Name:</strong> ${payment.name}</p>
+        <p><strong>Phone:</strong> ${payment.phone}</p>
+        <p><strong>Address:</strong> ${payment.address}</p>
+        <p><strong>Amount:</strong> ₹${payment.amount}</p>
+        <p><strong>Payment ID:</strong> ${payment.paymentId || 'N/A'}</p>
+        <p><strong>Status:</strong> Paid</p>
+        <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+      `,
+    });
+
+    // 2. Confirmation to Customer (using phone as we don't have email yet)
+    // For now we send to owner only. We can add customer email later.
+    console.log('Owner notification sent successfully');
+  } catch (error) {
+    console.error('Email error:', error);
+  }
+}
 
 // Create Payment Link
 app.post('/create-payment-link', async (req, res) => {
@@ -64,7 +101,6 @@ app.post('/create-payment-link', async (req, res) => {
       },
     });
 
-    // Save to database
     await Payment.create({
       paymentLinkId: paymentLink.id,
       status: 'created',
@@ -85,7 +121,7 @@ app.post('/create-payment-link', async (req, res) => {
   }
 });
 
-// Webhook endpoint
+// Webhook
 app.post('/webhook', async (req, res) => {
   try {
     const secret = 'lacosmo_secret_2026';
@@ -111,15 +147,21 @@ app.post('/webhook', async (req, res) => {
       const paymentId = event.payload?.payment?.entity?.id;
 
       if (paymentLinkId) {
-        await Payment.findOneAndUpdate(
+        const payment = await Payment.findOneAndUpdate(
           { paymentLinkId },
           {
             status: 'paid',
             paymentId: paymentId || null,
             paidAt: new Date(),
-          }
+          },
+          { new: true }
         );
-        console.log('Payment marked as PAID:', paymentLinkId);
+
+        if (payment) {
+          // Send email notifications
+          await sendEmails(payment);
+          console.log('Payment marked as PAID + Emails sent:', paymentLinkId);
+        }
       }
     }
 
@@ -155,7 +197,7 @@ app.get('/payment-status/:id', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send('LA COSMO Backend is running with MongoDB');
+  res.send('LA COSMO Backend is running with Email Notifications');
 });
 
 const PORT = process.env.PORT || 3000;
