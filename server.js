@@ -11,7 +11,7 @@ app.use(cors());
 app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
-// MongoDB
+// ====================== DATABASE ======================
 mongoose.connect('mongodb+srv://sivakannanram_db_user:TnTjo7BuaPrXuCLy@cluster0.ehoytmm.mongodb.net/?retryWrites=true&w=majority')
   .then(() => console.log('MongoDB Connected'))
   .catch(err => console.error('MongoDB connection error:', err));
@@ -21,33 +21,35 @@ const paymentSchema = new mongoose.Schema({
   status: { type: String, default: 'created' },
   amount: Number,
   name: String,
+  email: String,
   phone: String,
   address: String,
   paymentId: String,
+  items: Array,
   createdAt: { type: Date, default: Date.now },
   paidAt: Date,
 });
 
 const Payment = mongoose.model('Payment', paymentSchema);
 
+// ====================== RAZORPAY ======================
 const razorpay = new Razorpay({
   key_id: 'rzp_test_THfhMRJtsqlVO1',
   key_secret: 'A68VJ6R6lnWwkmYQZU1O7Guu',
 });
 
-// ========== EMAIL SETUP ==========
+// ====================== EMAIL ======================
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: 'itslacosmo@gmail.com',
-    pass: 'jebbeh1wukkefibkUr',   // App Password (dashes removed)
+    pass: 'jebbeh1wukkefibkUr',
   },
 });
 
-// Send notification emails
-async function sendEmails(payment) {
+async function sendOrderEmails(payment) {
   try {
-    // Notification to Store Owner
+    // 1. Email to Store Owner
     await transporter.sendMail({
       from: '"LA COSMO Orders" <itslacosmo@gmail.com>',
       to: 'contact@lacosmo.in',
@@ -55,29 +57,52 @@ async function sendEmails(payment) {
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px;">
           <h2 style="color: #5C6B4A;">New Order Received</h2>
-          <p><strong>Customer Name:</strong> ${payment.name}</p>
+          <p><strong>Customer:</strong> ${payment.name}</p>
+          <p><strong>Email:</strong> ${payment.email || 'Not provided'}</p>
           <p><strong>Phone:</strong> ${payment.phone}</p>
           <p><strong>Address:</strong> ${payment.address}</p>
-          <p><strong>Amount Paid:</strong> ₹${payment.amount}</p>
+          <p><strong>Amount:</strong> ₹${payment.amount}</p>
           <p><strong>Payment ID:</strong> ${payment.paymentId || 'N/A'}</p>
-          <p><strong>Status:</strong> <span style="color: green;">Paid</span></p>
+          <p><strong>Status:</strong> <span style="color:green;">Paid</span></p>
           <p><strong>Time:</strong> ${new Date().toLocaleString('en-IN')}</p>
-          <hr/>
-          <p style="color: #777; font-size: 13px;">LA COSMO - Conscious Fashion</p>
         </div>
       `,
     });
 
-    console.log('Email notification sent to contact@lacosmo.in');
+    // 2. Order Confirmation to Customer
+    if (payment.email) {
+      await transporter.sendMail({
+        from: '"LA COSMO" <itslacosmo@gmail.com>',
+        to: payment.email,
+        subject: `Order Confirmation - LA COSMO (₹${payment.amount})`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px;">
+            <h2 style="color: #5C6B4A;">Thank you for your order!</h2>
+            <p>Hi ${payment.name},</p>
+            <p>We have received your payment of <strong>₹${payment.amount}</strong>.</p>
+            <p>Your order is being processed and will be shipped soon.</p>
+            <br/>
+            <p><strong>Delivery Address:</strong><br/>${payment.address}</p>
+            <br/>
+            <p>If you have any questions, reply to this email or WhatsApp us.</p>
+            <p style="color:#5C6B4A; font-weight:600;">LA COSMO – Conscious Fashion</p>
+          </div>
+        `,
+      });
+    }
+
+    console.log('Emails sent successfully');
   } catch (error) {
-    console.error('Email sending failed:', error.message);
+    console.error('Email error:', error.message);
   }
 }
+
+// ====================== ROUTES ======================
 
 // Create Payment Link
 app.post('/create-payment-link', async (req, res) => {
   try {
-    const { amount, name, phone, address } = req.body;
+    const { amount, name, email, phone, address, items } = req.body;
 
     if (!amount || amount <= 0) {
       return res.status(400).json({ error: 'Invalid amount' });
@@ -90,11 +115,12 @@ app.post('/create-payment-link', async (req, res) => {
       description: 'LA COSMO Order',
       customer: {
         name: name || 'Customer',
+        email: email || '',
         contact: phone || '',
       },
       notify: {
         sms: true,
-        email: false,
+        email: !!email,
       },
       reminder_enable: true,
       notes: {
@@ -107,8 +133,10 @@ app.post('/create-payment-link', async (req, res) => {
       status: 'created',
       amount,
       name,
+      email,
       phone,
       address,
+      items: items || [],
     });
 
     res.json({
@@ -141,7 +169,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     const event = JSON.parse(req.body.toString());
-    console.log('Webhook received:', event.event);
+    console.log('Webhook:', event.event);
 
     if (event.event === 'payment_link.paid') {
       const paymentLinkId = event.payload?.payment_link?.entity?.id;
@@ -159,8 +187,8 @@ app.post('/webhook', async (req, res) => {
         );
 
         if (payment) {
-          await sendEmails(payment);
-          console.log('Payment PAID + Email sent:', paymentLinkId);
+          await sendOrderEmails(payment);
+          console.log('Payment PAID + Emails sent');
         }
       }
     }
@@ -197,7 +225,7 @@ app.get('/payment-status/:id', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send('LA COSMO Backend is running with Email Notifications');
+  res.send('LA COSMO Backend is running');
 });
 
 const PORT = process.env.PORT || 3000;
