@@ -36,40 +36,41 @@ const razorpay = new Razorpay({
 });
 
 // ========== EMAIL SETUP ==========
-// Using Gmail (you need an App Password)
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'itslacosmo@gmail.com',          // Your Gmail
-    pass: 'YOUR_GMAIL_APP_PASSWORD',       // ← Replace this
+    user: 'itslacosmo@gmail.com',
+    pass: 'jebbeh1wukkefibkUr',   // App Password (dashes removed)
   },
 });
 
-// Send email function
+// Send notification emails
 async function sendEmails(payment) {
   try {
-    // 1. Notification to Store Owner
+    // Notification to Store Owner
     await transporter.sendMail({
       from: '"LA COSMO Orders" <itslacosmo@gmail.com>',
       to: 'contact@lacosmo.in',
-      subject: `New Order Received - ₹${payment.amount}`,
+      subject: `New Paid Order - ₹${payment.amount}`,
       html: `
-        <h2>New Order Received</h2>
-        <p><strong>Customer Name:</strong> ${payment.name}</p>
-        <p><strong>Phone:</strong> ${payment.phone}</p>
-        <p><strong>Address:</strong> ${payment.address}</p>
-        <p><strong>Amount:</strong> ₹${payment.amount}</p>
-        <p><strong>Payment ID:</strong> ${payment.paymentId || 'N/A'}</p>
-        <p><strong>Status:</strong> Paid</p>
-        <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+        <div style="font-family: Arial, sans-serif; max-width: 600px;">
+          <h2 style="color: #5C6B4A;">New Order Received</h2>
+          <p><strong>Customer Name:</strong> ${payment.name}</p>
+          <p><strong>Phone:</strong> ${payment.phone}</p>
+          <p><strong>Address:</strong> ${payment.address}</p>
+          <p><strong>Amount Paid:</strong> ₹${payment.amount}</p>
+          <p><strong>Payment ID:</strong> ${payment.paymentId || 'N/A'}</p>
+          <p><strong>Status:</strong> <span style="color: green;">Paid</span></p>
+          <p><strong>Time:</strong> ${new Date().toLocaleString('en-IN')}</p>
+          <hr/>
+          <p style="color: #777; font-size: 13px;">LA COSMO - Conscious Fashion</p>
+        </div>
       `,
     });
 
-    // 2. Confirmation to Customer (using phone as we don't have email yet)
-    // For now we send to owner only. We can add customer email later.
-    console.log('Owner notification sent successfully');
+    console.log('Email notification sent to contact@lacosmo.in');
   } catch (error) {
-    console.error('Email error:', error);
+    console.error('Email sending failed:', error.message);
   }
 }
 
@@ -158,9 +159,8 @@ app.post('/webhook', async (req, res) => {
         );
 
         if (payment) {
-          // Send email notifications
           await sendEmails(payment);
-          console.log('Payment marked as PAID + Emails sent:', paymentLinkId);
+          console.log('Payment PAID + Email sent:', paymentLinkId);
         }
       }
     }
