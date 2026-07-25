@@ -12,9 +12,13 @@ app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
 // ====================== DATABASE ======================
-mongoose.connect('mongodb+srv://sivakannanram_db_user:TnTjo7BuaPrXuCLy@cluster0.ehoytmm.mongodb.net/?retryWrites=true&w=majority')
-  .then(() => console.log('MongoDB Connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
+const MONGODB_URI = 'mongodb+srv://sivakannanram_db_user:TnTjo7BuaPrXuCLy@cluster0.ehoytmm.mongodb.net/?retryWrites=true&w=majority';
+
+mongoose.connect(MONGODB_URI, {
+  serverSelectionTimeoutMS: 5000,
+})
+  .then(() => console.log('MongoDB Connected Successfully'))
+  .catch(err => console.error('MongoDB connection error:', err.message));
 
 const paymentSchema = new mongoose.Schema({
   paymentLinkId: { type: String, required: true, unique: true },
@@ -49,7 +53,7 @@ const transporter = nodemailer.createTransport({
 
 async function sendOrderEmails(payment) {
   try {
-    // 1. Email to Store Owner
+    // Notification to Store Owner
     await transporter.sendMail({
       from: '"LA COSMO Orders" <itslacosmo@gmail.com>',
       to: 'contact@lacosmo.in',
@@ -69,7 +73,7 @@ async function sendOrderEmails(payment) {
       `,
     });
 
-    // 2. Order Confirmation to Customer
+    // Order Confirmation to Customer
     if (payment.email) {
       await transporter.sendMail({
         from: '"LA COSMO" <itslacosmo@gmail.com>',
@@ -108,6 +112,7 @@ app.post('/create-payment-link', async (req, res) => {
       return res.status(400).json({ error: 'Invalid amount' });
     }
 
+    // 1. Create Razorpay Payment Link first
     const paymentLink = await razorpay.paymentLink.create({
       amount: Math.round(amount * 100),
       currency: 'INR',
@@ -128,24 +133,32 @@ app.post('/create-payment-link', async (req, res) => {
       },
     });
 
-    await Payment.create({
-      paymentLinkId: paymentLink.id,
-      status: 'created',
-      amount,
-      name,
-      email,
-      phone,
-      address,
-      items: items || [],
-    });
+    // 2. Try to save to database (but don't fail the whole request if it fails)
+    try {
+      await Payment.create({
+        paymentLinkId: paymentLink.id,
+        status: 'created',
+        amount,
+        name,
+        email,
+        phone,
+        address,
+        items: items || [],
+      });
+      console.log('Order saved to database');
+    } catch (dbError) {
+      console.error('Database save failed (but payment link is created):', dbError.message);
+    }
 
+    // Always return success if Razorpay link is created
     res.json({
       success: true,
       payment_link: paymentLink.short_url,
       id: paymentLink.id,
     });
+
   } catch (error) {
-    console.error(error);
+    console.error('Create payment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -176,19 +189,25 @@ app.post('/webhook', async (req, res) => {
       const paymentId = event.payload?.payment?.entity?.id;
 
       if (paymentLinkId) {
-        const payment = await Payment.findOneAndUpdate(
-          { paymentLinkId },
-          {
-            status: 'paid',
-            paymentId: paymentId || null,
-            paidAt: new Date(),
-          },
-          { new: true }
-        );
+        try {
+          const payment = await Payment.findOneAndUpdate(
+            { paymentLinkId },
+            {
+              status: 'paid',
+              paymentId: paymentId || null,
+              paidAt: new Date(),
+            },
+            { new: true }
+          );
 
-        if (payment) {
-          await sendOrderEmails(payment);
-          console.log('Payment PAID + Emails sent');
+          if (payment) {
+            await sendOrderEmails(payment);
+            console.log('Payment PAID + Emails sent');
+          } else {
+            console.log('Payment link not found in DB, but payment was successful');
+          }
+        } catch (err) {
+          console.error('Webhook DB error:', err.message);
         }
       }
     }
@@ -196,10 +215,14 @@ app.post('/webhook', async (req, res) => {
     if (event.event === 'payment_link.expired') {
       const paymentLinkId = event.payload?.payment_link?.entity?.id;
       if (paymentLinkId) {
-        await Payment.findOneAndUpdate(
-          { paymentLinkId },
-          { status: 'expired' }
-        );
+        try {
+          await Payment.findOneAndUpdate(
+            { paymentLinkId },
+            { status: 'expired' }
+          );
+        } catch (err) {
+          console.error('Expired update error:', err.message);
+        }
       }
     }
 
