@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const app = express();
 app.use(cors());
 
-// We need raw body for webhook signature verification
+// Raw body needed for webhook signature verification
 app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
@@ -15,7 +15,7 @@ const razorpay = new Razorpay({
   key_secret: 'A68VJ6R6lnWwkmYQZU1O7Guu',
 });
 
-// Temporary storage (in real app use a database)
+// Temporary storage (replace with database later)
 const payments = {};
 
 // Create Payment Link
@@ -28,7 +28,7 @@ app.post('/create-payment-link', async (req, res) => {
     }
 
     const paymentLink = await razorpay.paymentLink.create({
-      amount: Math.round(amount * 100), // in paise
+      amount: Math.round(amount * 100), // Convert to paise
       currency: 'INR',
       accept_partial: false,
       description: 'LA COSMO Order',
@@ -46,7 +46,6 @@ app.post('/create-payment-link', async (req, res) => {
       },
     });
 
-    // Store initial status
     payments[paymentLink.id] = {
       status: 'created',
       amount: amount,
@@ -70,7 +69,7 @@ app.post('/create-payment-link', async (req, res) => {
 // Webhook endpoint
 app.post('/webhook', (req, res) => {
   try {
-    const secret = 'YOUR_WEBHOOK_SECRET'; // We will set this later
+    const secret = 'lacosmo_secret_2026';
     const signature = req.headers['x-razorpay-signature'];
 
     const shasum = crypto.createHmac('sha256', secret);
@@ -78,7 +77,7 @@ app.post('/webhook', (req, res) => {
     const digest = shasum.digest('hex');
 
     if (digest === signature) {
-      const event = JSON.parse(req.body);
+      const event = JSON.parse(req.body.toString());
 
       console.log('Webhook Event:', event.event);
 
@@ -92,11 +91,19 @@ app.post('/webhook', (req, res) => {
           payments[paymentLinkId].paidAt = new Date();
         }
 
-        console.log('Payment successful for:', paymentLinkId);
+        console.log('Payment successful:', paymentLinkId);
+      }
+
+      if (event.event === 'payment_link.expired') {
+        const paymentLinkId = event.payload.payment_link.entity.id;
+        if (payments[paymentLinkId]) {
+          payments[paymentLinkId].status = 'expired';
+        }
       }
 
       res.status(200).json({ status: 'ok' });
     } else {
+      console.log('Invalid signature');
       res.status(400).json({ error: 'Invalid signature' });
     }
   } catch (error) {
